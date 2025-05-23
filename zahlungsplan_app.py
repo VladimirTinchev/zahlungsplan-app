@@ -24,9 +24,13 @@ def extract_amount_from_pdf(file):
         return None
 
 def format_de_eur(value):
-    if pd.isna(value) or value is None:
+    try:
+        if pd.isna(value) or value is None:
+            return ""
+        val = float(value)
+        return f"{val:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
         return ""
-    return f"{value:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", ".")
 
 class PDF(FPDF):
     def __init__(self, mietername, adresse, vertragsnummer):
@@ -37,14 +41,12 @@ class PDF(FPDF):
 
     def header(self):
         self.set_font("Helvetica", "B", 12)
-        self.cell(0, 10, self.mietername)
-        self.ln()
+        self.cell(0, 10, self.mietername, ln=True)
         self.set_font("Helvetica", "", 10)
-        self.cell(0, 8, self.adresse)
-        self.ln()
+        self.cell(0, 8, self.adresse, ln=True)
         self.set_font("Helvetica", "I", 10)
-        self.cell(0, 8, "Die Beträge sind brutto.")
-        self.ln(8)
+        self.multi_cell(0, 8, "Die Beträge sind brutto.", align="L")
+        self.ln(4)
 
 def create_payment_plan(miete, werbung, gastro):
     monate = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"]
