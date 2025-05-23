@@ -1,40 +1,68 @@
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
+import pdfplumber
 import tempfile
+import os
 
-st.set_page_config(page_title="Zahlungsplan Generator", layout="centered")
-
-MONATE = [
-    "Januar", "Februar", "März", "April", "Mai", "Juni",
-    "Juli", "August", "September", "Oktober", "November", "Dezember"
-]
-BREITEN = [30, 32, 20, 32, 20, 32, 20, 34]
+def extract_amount_from_pdf(file):
+    with pdfplumber.open(file) as pdf:
+        text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+    lines = text.split("\n")
+    for line in reversed(lines):
+        if any(keyword in line.lower() for keyword in ["betrag", "gesamt", "total"]):
+            for word in line.split():
+                word_clean = word.replace(".", "").replace(",", ".").replace("€", "")
+                try:
+                    val = float(word_clean)
+                    return round(val, 2)
+                except:
+                    continue
+    return None
 
 def format_de_eur(value):
-    if pd.isna(value):
+    if pd.isna(value) or value is None:
         return ""
     return f"{value:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def erstelle_pdf(df, mietername, mieteradresse, vertragsnummer):
-    class PDF(FPDF):
-        def header(self):
-            self.set_font("Helvetica", "B", 12)
-            self.cell(0, 10, mietername)
-            self.ln()
-            self.set_font("Helvetica", "", 10)
-            self.cell(0, 8, mieteradresse)
-            self.ln()
-            self.set_font("Helvetica", "I", 10)
-            self.cell(0, 8, "Die Beträge sind brutto.")
-            self.ln(8)
+class PDF(FPDF):
+    def __init__(self, mietername, adresse, vertragsnummer):
+        super().__init__()
+        self.mietername = mietername
+        self.adresse = adresse
+        self.vertragsnummer = vertragsnummer
 
-    pdf = PDF()
+    def header(self):
+        self.set_font("Helvetica", "B", 12)
+        self.cell(0, 10, self.mietername)
+        self.ln()
+        self.set_font("Helvetica", "", 10)
+        self.cell(0, 8, self.adresse)
+        self.ln()
+        self.set_font("Helvetica", "I", 10)
+        self.cell(0, 8, "Die Beträge sind brutto.")
+        self.ln(8)
+
+def create_payment_plan(miete, werbung, gastro):
+    monate = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"]
+    rows = []
+    for monat in monate:
+        wb = werbung if monat in ["Januar", "Juli"] else None
+        row = [monat, miete, None, wb, None, gastro if gastro is not None else None, None]
+        row.append(sum(filter(None, [miete, wb, gastro])))
+        rows.append(row)
+    return pd.DataFrame(rows, columns=["Monat", "Miete + Nebenkosten", "Überwiesen", "Werbebeitrag", "Überwiesen2", "Gastro (Fettabluft)", "Überwiesen3", "Monatlich insgesamt"])
+
+def generate_pdf(df, mietername, adresse, vertragsnummer):
+    pdf = PDF(mietername, adresse, vertragsnummer)
     pdf.add_page()
 
+    spalten = df.columns.tolist()
+    breiten = [30, 32, 20, 32, 20, 32, 20, 34]
+
     pdf.set_font("Helvetica", "B", 9)
-    for i, col in enumerate(df.columns.tolist()):
-        pdf.cell(BREITEN[i], 8, col, border=1, align="C")
+    for i, col in enumerate(spalten):
+        pdf.cell(breiten[i], 8, col, border=1, align="C")
     pdf.ln()
 
     pdf.set_font("Helvetica", "", 9)
@@ -45,17 +73,18 @@ def erstelle_pdf(df, mietername, mieteradresse, vertragsnummer):
             "",
             format_de_eur(row["Werbebeitrag"]),
             "",
-            format_de_eur(row["Gastro (Fettabluft)"]),
+            format_de_eur(row.get("Gastro (Fettabluft)", None)),
             "",
             format_de_eur(row["Monatlich insgesamt"])
         ]
         for i, val in enumerate(werte):
-            pdf.cell(BREITEN[i], 8, val, border=1, align="C")
+            pdf.cell(breiten[i], 8, val, border=1, align="C")
         pdf.ln()
 
     pdf.ln(6)
     pdf.set_font("Helvetica", "", 9)
-    zahlungstext = f"""
+
+    konto_infos = f"""
 Zahlungsempfänger & Kontoverbindungen:
 
 1. Miete + Nebenkosten - Kontoinhaber: HBB Gewerbebau Projektgesellschaft
@@ -69,59 +98,46 @@ IBAN: DE39 2005 0550 1002 2985 84
 BIC: HASPDEHHXXX
 Bank: Hamburger Sparkasse
 Verwendungszweck: {vertragsnummer}
-
+"""
+    if df["Gastro (Fettabluft)"].notna().any():
+        konto_infos += f"""
 3. Gastro - Kontoinhaber: HBB Betreuungsgesellschaft mbH
 IBAN: DE56 2005 0550 1002 2562 77
 BIC: HASPDEHHXXX
 Bank: Hamburger Sparkasse
 """
-    for line in zahlungstext.strip().splitlines():
-        clean = line.strip().replace("–", "-").replace("—", "-")
-        if clean:
-            pdf.multi_cell(180, 6, clean, align="L")
-        else:
-            pdf.ln(4)
+    for line in konto_infos.strip().split("\n"):
+        pdf.multi_cell(180, 6, line.strip(), align="L")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        pdf.output(tmp.name)
-        return tmp.name
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    pdf.output(temp.name)
+    return temp.name
 
-st.title("📄 Zahlungsplan Generator")
-with st.form("input_form"):
-    st.subheader("Mieterinformationen")
-    mietername = st.text_input("Mietername", "BK-Süd GmbH / Burger King")
-    mieteradresse = st.text_input("Adresse", "Raiffeisenstraße 8, 78658 Zimmern")
-    vertragsnummer = st.text_input("Vertragsnummer", "0080098001")
+# === STREAMLIT INTERFACE ===
+st.set_page_config(page_title="Zahlungsplan Assistent")
+st.title("📄 Zahlungsplan automatisch erstellen")
 
-    st.subheader("Beträge eingeben (brutto)")
-    betrag_miete = st.number_input("Monatlich: Miete + Nebenkosten", value=5250.18)
-    betrag_werbung = st.number_input("Halbjährlich: Werbebeitrag", value=2178.41)
-    betrag_gastro = st.number_input("Monatlich: Gastro (Fettabluft)", value=335.02)
+st.markdown("Bitte lade 2 oder 3 PDF-Rechnungen hoch (Projektgesellschaft, Centermanagement und optional Gastro).")
 
-    submitted = st.form_submit_button("PDF erzeugen")
+mietername = st.text_input("Mietername", "BK-Süd GmbH / Burger King")
+adresse = st.text_input("Adresse", "Raiffeisenstraße 8, 78658 Zimmern")
+vertragsnummer = st.text_input("Vertragsnummer", "0080098001")
 
-if submitted:
-    daten = []
-    for monat in MONATE:
-        werbung = betrag_werbung if monat in ["Januar", "Juli"] else ""
-        daten.append([
-            monat,
-            betrag_miete,
-            "",
-            werbung,
-            "",
-            betrag_gastro,
-            "",
-            sum(filter(None, [betrag_miete, werbung, betrag_gastro]))
-        ])
+uploaded_files = st.file_uploader("PDF-Rechnungen hochladen", type="pdf", accept_multiple_files=True)
 
-    df = pd.DataFrame(daten, columns=[
-        "Monat", "Miete + Nebenkosten", "Überwiesen",
-        "Werbebeitrag", "Überwiesen2", "Gastro (Fettabluft)",
-        "Überwiesen3", "Monatlich insgesamt"
-    ])
+if len(uploaded_files) in [2, 3]:
+    if st.button("📑 Zahlungsplan & PDF erzeugen"):
+        betraege = [extract_amount_from_pdf(file) for file in uploaded_files]
+        betraege.sort(reverse=True)
 
-    pfad = erstelle_pdf(df, mietername, mieteradresse, vertragsnummer)
-    st.success("✅ PDF erfolgreich erstellt!")
-    with open(pfad, "rb") as f:
-        st.download_button("📥 PDF herunterladen", f, file_name="Zahlungsplan.pdf", mime="application/pdf")
+        miete, werbung = betraege[0], betraege[1]
+        gastro = betraege[2] if len(betraege) == 3 else None
+
+        df = create_payment_plan(miete, werbung, gastro)
+        pfad = generate_pdf(df, mietername, adresse, vertragsnummer)
+
+        st.success("✅ PDF wurde erfolgreich erstellt!")
+        with open(pfad, "rb") as f:
+            st.download_button("📥 PDF herunterladen", f, file_name="Zahlungsplan.pdf", mime="application/pdf")
+elif len(uploaded_files) > 0:
+    st.warning("Bitte lade genau 2 oder 3 PDF-Dateien hoch (Miete+Nebenkosten, Werbung, optional Gastro).")
