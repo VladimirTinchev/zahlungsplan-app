@@ -6,19 +6,22 @@ import tempfile
 import os
 
 def extract_amount_from_pdf(file):
-    with pdfplumber.open(file) as pdf:
-        text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
-    lines = text.split("\n")
-    for line in reversed(lines):
-        if any(keyword in line.lower() for keyword in ["betrag", "gesamt", "total"]):
-            for word in line.split():
-                word_clean = word.replace(".", "").replace(",", ".").replace("€", "")
-                try:
-                    val = float(word_clean)
-                    return round(val, 2)
-                except:
-                    continue
-    return None
+    try:
+        with pdfplumber.open(file) as pdf:
+            text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+        lines = text.split("\n")
+        for line in reversed(lines):
+            if any(keyword in line.lower() for keyword in ["betrag", "gesamt", "total"]):
+                for word in line.split():
+                    word_clean = word.replace(".", "").replace(",", ".").replace("€", "")
+                    try:
+                        val = float(word_clean)
+                        return round(val, 2)
+                    except:
+                        continue
+        return None
+    except:
+        return None
 
 def format_de_eur(value):
     if pd.isna(value) or value is None:
@@ -84,8 +87,7 @@ def generate_pdf(df, mietername, adresse, vertragsnummer):
     pdf.ln(6)
     pdf.set_font("Helvetica", "", 9)
 
-    konto_infos = f"""
-Zahlungsempfänger & Kontoverbindungen:
+    konto_infos = f"""Zahlungsempfänger & Kontoverbindungen:
 
 1. Miete + Nebenkosten - Kontoinhaber: HBB Gewerbebau Projektgesellschaft
 IBAN: DE94 1003 0200 1052 5300 42
@@ -97,15 +99,13 @@ Verwendungszweck: {vertragsnummer}
 IBAN: DE39 2005 0550 1002 2985 84
 BIC: HASPDEHHXXX
 Bank: Hamburger Sparkasse
-Verwendungszweck: {vertragsnummer}
-"""
+Verwendungszweck: {vertragsnummer}"""
     if df["Gastro (Fettabluft)"].notna().any():
-        konto_infos += f"""
-3. Gastro - Kontoinhaber: HBB Betreuungsgesellschaft mbH
+        konto_infos += f"""\n3. Gastro - Kontoinhaber: HBB Betreuungsgesellschaft mbH
 IBAN: DE56 2005 0550 1002 2562 77
 BIC: HASPDEHHXXX
-Bank: Hamburger Sparkasse
-"""
+Bank: Hamburger Sparkasse""""
+
     for line in konto_infos.strip().split("\n"):
         pdf.multi_cell(180, 6, line.strip(), align="L")
 
@@ -113,31 +113,33 @@ Bank: Hamburger Sparkasse
     pdf.output(temp.name)
     return temp.name
 
-# === STREAMLIT INTERFACE ===
-st.set_page_config(page_title="Zahlungsplan Assistent")
-st.title("📄 Zahlungsplan automatisch erstellen")
+# === STREAMLIT UI ===
+st.set_page_config(page_title="Zahlungsplan Generator", layout="centered")
+st.title("📄 Zahlungsplan Generator")
 
-st.markdown("Bitte lade 2 oder 3 PDF-Rechnungen hoch (Projektgesellschaft, Centermanagement und optional Gastro).")
+st.markdown("**Mieterinformationen**")
+mietername = st.text_input("Mietername", "")
+adresse = st.text_input("Adresse", "")
+vertragsnummer = st.text_input("Vertragsnummer", "")
 
-mietername = st.text_input("Mietername", "BK-Süd GmbH / Burger King")
-adresse = st.text_input("Adresse", "Raiffeisenstraße 8, 78658 Zimmern")
-vertragsnummer = st.text_input("Vertragsnummer", "0080098001")
+st.markdown("**📎 Lade 2 oder 3 PDF-Rechnungen hoch (Drag & Drop oder Datei auswählen):**")
+uploaded_files = st.file_uploader("Rechnungen hochladen", type="pdf", accept_multiple_files=True)
 
-uploaded_files = st.file_uploader("PDF-Rechnungen hochladen", type="pdf", accept_multiple_files=True)
-
-if len(uploaded_files) in [2, 3]:
-    if st.button("📑 Zahlungsplan & PDF erzeugen"):
+if len(uploaded_files) not in [2, 3]:
+    st.info("Bitte genau 2 oder 3 PDF-Dateien hochladen.")
+else:
+    if st.button("📑 PDF erzeugen"):
         betraege = [extract_amount_from_pdf(file) for file in uploaded_files]
-        betraege.sort(reverse=True)
+        if any(b is None for b in betraege):
+            st.error("Mindestens eine Datei konnte nicht gelesen werden. Bitte überprüfe die PDFs.")
+        else:
+            betraege.sort(reverse=True)
+            miete, werbung = betraege[0], betraege[1]
+            gastro = betraege[2] if len(betraege) == 3 else None
 
-        miete, werbung = betraege[0], betraege[1]
-        gastro = betraege[2] if len(betraege) == 3 else None
+            df = create_payment_plan(miete, werbung, gastro)
+            pfad = generate_pdf(df, mietername, adresse, vertragsnummer)
 
-        df = create_payment_plan(miete, werbung, gastro)
-        pfad = generate_pdf(df, mietername, adresse, vertragsnummer)
-
-        st.success("✅ PDF wurde erfolgreich erstellt!")
-        with open(pfad, "rb") as f:
-            st.download_button("📥 PDF herunterladen", f, file_name="Zahlungsplan.pdf", mime="application/pdf")
-elif len(uploaded_files) > 0:
-    st.warning("Bitte lade genau 2 oder 3 PDF-Dateien hoch (Miete+Nebenkosten, Werbung, optional Gastro).")
+            st.success("✅ PDF wurde erfolgreich erstellt!")
+            with open(pfad, "rb") as f:
+                st.download_button("📥 PDF herunterladen", f, file_name="Zahlungsplan.pdf", mime="application/pdf")
