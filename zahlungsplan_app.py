@@ -89,26 +89,32 @@ def generate_pdf(df, mietername, adresse, vertragsnummer):
     pdf.ln(6)
     pdf.set_font("Helvetica", "", 9)
 
-    konto_infos = f"""Zahlungsempfänger & Kontoverbindungen:
+    konto_infos = [
+        "Zahlungsempfänger & Kontoverbindungen:",
+        "",
+        "1. Miete + Nebenkosten - Kontoinhaber: HBB Gewerbebau Projektgesellschaft",
+        "IBAN: DE94 1003 0200 1052 5300 42",
+        "BIC: BHYPDEB2XXX",
+        "Bank: Berlin Hyp",
+        f"Verwendungszweck: {vertragsnummer}",
+        "",
+        "2. Werbebeiträge - Kontoinhaber: HBB Centermanagement GmbH & Co. KG",
+        "IBAN: DE39 2005 0550 1002 2985 84",
+        "BIC: HASPDEHHXXX",
+        "Bank: Hamburger Sparkasse",
+        f"Verwendungszweck: {vertragsnummer}"
+    ]
 
-1. Miete + Nebenkosten - Kontoinhaber: HBB Gewerbebau Projektgesellschaft
-IBAN: DE94 1003 0200 1052 5300 42
-BIC: BHYPDEB2XXX
-Bank: Berlin Hyp
-Verwendungszweck: {vertragsnummer}
-
-2. Werbebeiträge - Kontoinhaber: HBB Centermanagement GmbH & Co. KG
-IBAN: DE39 2005 0550 1002 2985 84
-BIC: HASPDEHHXXX
-Bank: Hamburger Sparkasse
-Verwendungszweck: {vertragsnummer}"""
     if df["Gastro (Fettabluft)"].notna().any():
-        konto_infos += f"""\n3. Gastro - Kontoinhaber: HBB Betreuungsgesellschaft mbH
-IBAN: DE56 2005 0550 1002 2562 77
-BIC: HASPDEHHXXX
-Bank: Hamburger Sparkasse""""
+        konto_infos += [
+            "",
+            "3. Gastro - Kontoinhaber: HBB Betreuungsgesellschaft mbH",
+            "IBAN: DE56 2005 0550 1002 2562 77",
+            "BIC: HASPDEHHXXX",
+            "Bank: Hamburger Sparkasse"
+        ]
 
-    for line in konto_infos.strip().split("\n"):
+    for line in konto_infos:
         pdf.multi_cell(180, 6, line.strip(), align="L")
 
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
